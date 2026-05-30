@@ -899,19 +899,19 @@ function showFrame(i) {
   if (modelCircle) { map.removeLayer(modelCircle); modelCircle = null; }
 
   if (frame.type === 'model') {
-    // Synthesized frame — show a dashed circle sized by predicted precip intensity
-    if (frame.precip > 0) {
-      const col    = getRainColor(frame.precip);
-      const radius = Math.max(10000, Math.min(90000, frame.precip * 350000));
-      modelCircle  = L.circle([LAT, LON], {
-        radius,
-        color:       col.bar,
-        fillColor:   col.bar,
-        fillOpacity: 0.18,
-        weight:      2,
-        dashArray:   '8 5',
-      }).addTo(map);
-    }
+    // Synthesized frame — always show a dashed circle; size/color by precip when active
+    const col    = frame.precip > 0 ? getRainColor(frame.precip) : { bar: '#cbd5e1' };
+    const radius = frame.precip > 0
+      ? Math.max(10000, Math.min(90000, frame.precip * 350000))
+      : 40000;
+    modelCircle = L.circle([LAT, LON], {
+      radius,
+      color:       col.bar,
+      fillColor:   col.bar,
+      fillOpacity: frame.precip > 0 ? 0.18 : 0.04,
+      weight:      frame.precip > 0 ? 2 : 1,
+      dashArray:   '8 5',
+    }).addTo(map);
     document.getElementById('radar-source').className   = 'radar-source source-model';
     document.getElementById('radar-source').textContent  = frame.precip > 0
       ? `MODEL · ${getRainLabel(frame.precip)}`
