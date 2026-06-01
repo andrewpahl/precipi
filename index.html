@@ -386,17 +386,29 @@ function pollenScoreFromUVAndRain(uv, precip) {
   // dry: scale uv (0–11) to pollen (0–10)
   return Math.min(10, Math.round(uv * 0.95));
 }
-function calcRealFeel(tempF, windMph, humidity) {
+function calcRealFeel(tempF, windMph, humidity, uvIndex = 0) {
   if (tempF <= 50 && windMph > 3) {
+    // Wind chill — NWS formula, uses avg wind not peak
     return Math.round(35.74 + 0.6215*tempF - 35.75*Math.pow(windMph,0.16) + 0.4275*tempF*Math.pow(windMph,0.16));
   }
   if (tempF >= 80) {
+    // Heat index — Rothfusz regression (solar already baked in at these temps)
     const h = humidity || 60;
     return Math.round(-42.379 + 2.04901523*tempF + 10.14333127*h
       - 0.22475541*tempF*h - 0.00683783*tempF*tempF - 0.05481717*h*h
       + 0.00122874*tempF*tempF*h + 0.00085282*tempF*h*h - 0.00000199*tempF*tempF*h*h);
   }
-  return tempF;
+  // Mid-range 50–80°F: combine solar radiation, wind cooling, and humidity
+  let rf = tempF;
+  // Solar heating: direct sun can add 10–15°F on a clear day (UV index as proxy)
+  // Cap at 15°F; wind erodes solar effect above 15 mph (convective cooling)
+  const windSolarFactor = Math.max(0, 1 - Math.max(0, windMph - 15) * 0.05);
+  rf += Math.min(uvIndex * 1.5, 15) * windSolarFactor;
+  // Wind cooling above 8 mph
+  if (windMph > 8) rf -= (windMph - 8) * 0.4;
+  // Slight muggy warmth on humid-but-not-hot days
+  if (humidity > 70 && tempF > 65) rf += (humidity - 70) * 0.05;
+  return Math.round(rf);
 }
 function avg(arr) { return arr.length ? arr.reduce((a,b) => a+b, 0) / arr.length : 0; }
 function rfDeltaStr(rf, actual) {
@@ -456,7 +468,7 @@ async function loadData() {
     const dateLabel = `${dayShort} ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}`;
 
     const computeBlock = block => {
-      let totalPrecip = 0, maxWind = 0, maxGust = 0, temps = [], hums = [], probs = [], uvs = [];
+      let totalPrecip = 0, maxWind = 0, maxGust = 0, winds = [], temps = [], hums = [], probs = [], uvs = [];
       for (let h = block.start; h < block.end; h++) {
         // overnight: hours 22-31 map to next day's 0-9 (h >= 24)
         const dayOffset = h >= 24 ? 1 : 0;
@@ -465,23 +477,26 @@ async function loadData() {
         if (idx >= json.hourly.precipitation.length) continue;
         totalPrecip += json.hourly.precipitation[idx] || 0;
         probs.push(json.hourly.precipitation_probability[idx] || 0);
-        maxWind      = Math.max(maxWind, json.hourly.wind_speed_10m[idx] || 0);
+        const w = json.hourly.wind_speed_10m[idx] || 0;
+        winds.push(w);
+        maxWind      = Math.max(maxWind, w);
         maxGust      = Math.max(maxGust, json.hourly.wind_gusts_10m[idx] || 0);
         temps.push(json.hourly.temperature_2m[idx] || 0);
         hums.push(json.hourly.relative_humidity_2m[idx] || 60);
         uvs.push(json.hourly.uv_index[idx] || 0);
       }
-      const tempLo  = Math.round(Math.min(...temps));
-      const tempHi  = Math.round(Math.max(...temps));
-      const avgTemp = Math.round(avg(temps));
-      const avgHum  = Math.round(avg(hums));
-      const windRnd = Math.round(maxWind);
-      const gustRnd = Math.round(maxGust);
-      const avgProb = Math.round(avg(probs));
-      const maxUV   = Math.round(Math.max(...uvs));
-      const rf      = calcRealFeel(avgTemp, windRnd, avgHum);
-      const pollen  = pollenScoreFromUVAndRain(maxUV, totalPrecip);
-      return { ...block, precip: totalPrecip, prob: avgProb, wind: windRnd, gust: gustRnd, tempLo, tempHi, realFeel: rf, uv: maxUV, pollen };
+      const tempLo   = Math.round(Math.min(...temps));
+      const tempHi   = Math.round(Math.max(...temps));
+      const avgTemp  = Math.round(avg(temps));
+      const avgHum   = Math.round(avg(hums));
+      const avgWind  = Math.round(avg(winds));  // use avg wind for feels-like, not peak
+      const windRnd  = Math.round(maxWind);
+      const gustRnd  = Math.round(maxGust);
+      const avgProb  = Math.round(avg(probs));
+      const maxUV    = Math.round(Math.max(...uvs));
+      const rf       = calcRealFeel(avgTemp, avgWind, avgHum, maxUV);
+      const pollen   = pollenScoreFromUVAndRain(maxUV, totalPrecip);
+      return { ...block, precip: totalPrecip, prob: avgProb, wind: windRnd, gust: gustRnd, tempLo, tempHi, realFeel: rf, uv: maxUV, pollen, humidity: avgHum };
     };
 
     const blocks    = TIME_BLOCKS.map(computeBlock);
@@ -494,6 +509,19 @@ async function loadData() {
       h = h % 12 || 12;
       return `${h}:${String(m).padStart(2,'0')}${ampm}`;
     };
+
+    // Peak UV hours: window where UV >= 70% of the day's max
+    const fmtH = h => { const ampm = h >= 12 ? 'pm' : 'am'; return `${(h % 12) || 12}${ampm}`; };
+    const dayUVs = Array.from({ length: 24 }, (_, h) => ({
+      h, uv: json.hourly.uv_index[i * 24 + h] || 0
+    }));
+    const maxDayUV = Math.max(...dayUVs.map(x => x.uv));
+    let peakUVHours = null;
+    if (maxDayUV >= 3) {
+      const threshold = maxDayUV * 0.70;
+      const peakHrs   = dayUVs.filter(x => x.uv >= threshold).map(x => x.h);
+      if (peakHrs.length) peakUVHours = `${fmtH(peakHrs[0])}–${fmtH(peakHrs[peakHrs.length - 1])} · index ${maxDayUV}`;
+    }
 
     return {
       date: dateLabel,
@@ -509,6 +537,7 @@ async function loadData() {
       precipProb: json.daily.precipitation_probability_max[i] || 0,
       blocks,
       overnight,
+      peakUVHours,
     };
   });
 }
@@ -622,6 +651,7 @@ function render(skipRadarVisibility = false) {
         <div class="divider"></div>
         <div class="stats">
           <div class="stats-row"><span>UV</span><span style="color:${getUVColor(block.uv).text};font-weight:600">${block.uv} · ${getUVColor(block.uv).label}</span></div>
+          <div class="stats-row"><span>HUMIDITY</span><span style="color:#64748b">${block.humidity}%</span></div>
           <div class="stats-row"><span>POLLEN</span><span style="color:${getPollenInfo(block.pollen).text};font-weight:600">${block.pollen} · ${getPollenInfo(block.pollen).label}</span></div>
         </div>
       </div>`;
@@ -736,7 +766,9 @@ function render(skipRadarVisibility = false) {
         </div>
         <span class="day-hilo">${day.high}° / ${day.low}°</span>
       </div>
-      <div style="font-size:10px;color:#94a3b8;font-family:'Spline Sans Mono',monospace;margin-bottom:6px;">sunrise ${day.sunrise} &nbsp;·&nbsp; sunset ${day.sunset}</div>
+      <div style="font-size:10px;color:#94a3b8;font-family:'Spline Sans Mono',monospace;margin-bottom:${day.peakUVHours ? '3px' : '6px'};">sunrise ${day.sunrise} &nbsp;·&nbsp; sunset ${day.sunset}</div>
+      ${day.peakUVHours ? `<div style="font-size:10px;color:#ca8a04;font-family:'Spline Sans Mono',monospace;margin-bottom:6px;">peak uv ${day.peakUVHours}</div>` : ''}
+
       <div style="font-size:12px;color:#475569;margin-bottom:14px;line-height:1.5;">${buildDaySummary(day.blocks)}</div>
 
       <div class="blocks">${blocksHTML}</div>
