@@ -50,7 +50,7 @@
     .bar { width: 8px; border-radius: 2px 2px 1px 1px; }
     .bar-empty { width: 8px; height: 2px; background: #e2e8f0; border-radius: 1px; }
     .day-precip { font-size: 10px; font-weight: 600; margin-bottom: 2px; }
-    .day-temps { font-size: 8px; color: #94a3b8; }
+    .day-temps { font-size: 11px; font-weight: 600; color: #475569; }
 
     /* Tab bar */
     .tabs { background: #fff; display: flex; border-bottom: 1px solid #e2e8f0; padding: 0 18px; }
@@ -205,7 +205,7 @@
   </div>
   <div id="main" style="display:none"></div>
   <div id="radar-pane">
-    <div style="background:#f0f9ff;border-bottom:1px solid #bae6fd;padding:7px 18px;font-size:10px;color:#0369a1;text-align:center;">🟢 Past 2hrs radar &nbsp;·&nbsp; 🔵 Nowcast (when active) &nbsp;·&nbsp; 🟡 24hrs GFS/ECMWF model ahead</div>
+    <div style="background:#f0f9ff;border-bottom:1px solid #bae6fd;padding:7px 18px;font-size:10px;color:#0369a1;text-align:center;">🟢 Past 2hrs radar &nbsp;·&nbsp; 🔵 Nowcast (when active)</div>
     <div id="radar-map"></div>
     <div class="radar-timeline" id="radar-dots"></div>
     <div class="radar-controls">
@@ -226,11 +226,11 @@ let LAT, LON, LOCATION_NAME;
 const DAYS_SHORT   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const TIME_BLOCKS  = [
-  { range:'8am–Noon', icon:'🌅', start:8,  end:12 },
+  { range:'7am–Noon', icon:'🌅', start:7,  end:12 },
   { range:'Noon–5pm', icon:'☀️', start:12, end:17 },
   { range:'5–10pm',   icon:'🌆', start:17, end:22 },
 ];
-const OVERNIGHT_BLOCK = { range:'10pm–8am', icon:'🌙', start:22, end:32 };
+const OVERNIGHT_BLOCK = { range:'10pm–7am', icon:'🌙', start:22, end:31 };
 
 let FORECAST        = [];
 let selectedDay     = 0;
@@ -665,7 +665,7 @@ function render(skipRadarVisibility = false) {
     <div class="overnight" style="border-color:${ov.precip > 0 ? ovc.bar : '#c7d2fe'}">
       ${ov.precip > 0 ? `<div class="overnight-accent" style="background:${ovc.bar}"></div>` : ''}
       <div class="overnight-header">
-        <div class="overnight-title">🌙 OVERNIGHT · 10PM–8AM</div>
+        <div class="overnight-title">🌙 OVERNIGHT · 10PM–7AM</div>
         <div class="overnight-precip-wrap">
           <div class="overnight-precip" style="color:${ov.precip > 0 ? ovc.text : '#cbd5e1'}">${ov.precip > 0 ? ov.precip.toFixed(2)+'"' : '—'}</div>
           <div class="overnight-badge" style="background:${ovc.badge};color:${ovc.badgeText}">${getRainLabelWeighted(ov.precip, ov.prob)}</div>
@@ -821,7 +821,6 @@ function setTab(tab) {
 /* ── Radar ── */
 let map          = null;
 let radarLayer   = null;
-let modelCircle  = null;
 let radarFrames  = [];
 let currentFrame = 0;
 let isPlaying    = false;
@@ -881,24 +880,11 @@ async function loadRadarFrames() {
     }
   } catch(e) { console.warn('RainViewer failed', e); }
 
-  // Always add 24h of Open-Meteo model frames so forward-looking data is always present
-  const nowTs = Math.floor(Date.now() / 1000);
-  const nowH  = new Date().getHours();
-  for (let h = 1; h <= 24; h++) {
-    const idx = nowH + h;
-    if (idx >= HOURLY_PRECIP.length) break;
-    radarFrames.push({
-      time:   nowTs + h * 3600,
-      type:   'model',
-      precip: HOURLY_PRECIP[idx] || 0,
-    });
-  }
-
   radarFrames.sort((a, b) => a.time - b.time);
 
-  // Start at the last real-radar frame (most recent "now")
-  const forwardCount = radarFrames.filter(f => f.type !== 'radar').length;
-  currentFrame = Math.max(0, radarFrames.length - forwardCount - 1);
+  // Start at the most recent radar frame
+  const lastRadarIdx = radarFrames.map(f => f.type).lastIndexOf('radar');
+  currentFrame = Math.max(0, lastRadarIdx);
 
   if (!radarFrames.filter(f => f.type === 'radar').length) {
     document.getElementById('radar-map').innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:13px;color:#94a3b8;">⚠️ Radar data unavailable — try refreshing.</div>';
@@ -911,7 +897,7 @@ function buildDots() {
   el.innerHTML = radarFrames.map((f, i) => {
     const cls = [
       'radar-dot',
-      f.type === 'radar' ? 'radar-type' : f.type === 'nowcast' ? 'nowcast-type' : 'model-type',
+      f.type === 'nowcast' ? 'nowcast-type' : 'radar-type',
       i === currentFrame ? 'current' : ''
     ].filter(Boolean).join(' ');
     return `<div class="${cls}" onclick="showFrame(${i})"></div>`;
@@ -926,38 +912,17 @@ function showFrame(i) {
   currentFrame = Math.max(0, Math.min(i, radarFrames.length - 1));
   const frame  = radarFrames[currentFrame];
 
-  // Remove old layers
-  if (radarLayer)  { map.removeLayer(radarLayer);  radarLayer  = null; }
-  if (modelCircle) { map.removeLayer(modelCircle); modelCircle = null; }
+  // Remove old layer
+  if (radarLayer) { map.removeLayer(radarLayer); radarLayer = null; }
 
-  if (frame.type === 'model') {
-    // Synthesized frame — always show a dashed circle; size/color by precip when active
-    const col    = frame.precip > 0 ? getRainColor(frame.precip) : { bar: '#cbd5e1' };
-    const radius = frame.precip > 0
-      ? Math.max(10000, Math.min(90000, frame.precip * 350000))
-      : 40000;
-    modelCircle = L.circle([LAT, LON], {
-      radius,
-      color:       col.bar,
-      fillColor:   col.bar,
-      fillOpacity: frame.precip > 0 ? 0.18 : 0.04,
-      weight:      frame.precip > 0 ? 2 : 1,
-      dashArray:   '8 5',
-    }).addTo(map);
-    document.getElementById('radar-source').className   = 'radar-source source-model';
-    document.getElementById('radar-source').textContent  = frame.precip > 0
-      ? `MODEL · ${getRainLabel(frame.precip)}`
-      : 'MODEL · Dry';
-  } else {
-    radarLayer = L.tileLayer(
-      `${frame.host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,
-      { opacity: 0.7, zIndex: 10 }
-    ).addTo(map);
-    document.getElementById('radar-source').className   = 'radar-source ' +
-      (frame.type === 'nowcast' ? 'source-nowcast' : 'source-radar');
-    document.getElementById('radar-source').textContent =
-      frame.type === 'nowcast' ? 'NOWCAST' : 'RADAR';
-  }
+  radarLayer = L.tileLayer(
+    `${frame.host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,
+    { opacity: 0.7, zIndex: 10 }
+  ).addTo(map);
+  document.getElementById('radar-source').className   = 'radar-source ' +
+    (frame.type === 'nowcast' ? 'source-nowcast' : 'source-radar');
+  document.getElementById('radar-source').textContent =
+    frame.type === 'nowcast' ? 'NOWCAST' : 'RADAR';
 
   document.getElementById('radar-time').textContent = fmtRadarTime(frame.time);
   buildDots();
