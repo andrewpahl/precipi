@@ -832,6 +832,7 @@ let swipeStartX = null;
 document.addEventListener('touchstart', e => { swipeStartX = e.touches[0].clientX; }, { passive: true });
 document.addEventListener('touchend', e => {
   if (swipeStartX === null) return;
+  if (document.getElementById('hourly-overlay').classList.contains('open')) { swipeStartX = null; return; }
   const dx = e.changedTouches[0].clientX - swipeStartX;
   swipeStartX = null;
   if (Math.abs(dx) < 50) return;
@@ -1120,7 +1121,10 @@ async function pickCity(lat, lon, name, state, country) {
   const label     = document.getElementById('ptr-label');
   const icon      = document.getElementById('ptr-icon');
 
+  const hourlyOpen = () => document.getElementById('hourly-overlay').classList.contains('open');
+
   document.addEventListener('touchstart', e => {
+    if (hourlyOpen()) return;
     if (window.scrollY === 0 && activeTab !== 'radar') {
       startY   = e.touches[0].clientY;
       pulling  = true;
