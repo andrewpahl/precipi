@@ -157,6 +157,24 @@
     .day-fade { animation: dayFade 0.18s ease-out; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .logo-spin { animation: spin 0.6s ease-in-out; }
+
+    /* Hourly modal */
+    .hourly-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 100; }
+    .hourly-overlay.open { display: block; }
+    .hourly-sheet { position: absolute; bottom: 0; left: 0; right: 0; background: #fff; border-radius: 18px 18px 0 0; padding: 12px 0 40px; max-width: 430px; margin: 0 auto; max-height: 82vh; display: flex; flex-direction: column; }
+    .hourly-sheet-head { padding: 0 20px 12px; flex-shrink: 0; }
+    .hourly-title { font-size: 13px; font-weight: 700; color: #0f172a; letter-spacing: 0.2px; }
+    .hourly-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 16px; }
+    .hourly-row { display: grid; grid-template-columns: 52px 1fr 32px; gap: 0; align-items: center; padding: 9px 4px; border-bottom: 1px solid #f1f5f9; }
+    .hourly-row:last-child { border-bottom: none; }
+    .hourly-time { font-size: 11px; font-weight: 700; color: #0f172a; font-family: 'Spline Sans Mono', monospace; }
+    .hourly-time.now { color: #3b82f6; }
+    .hourly-data { display: flex; flex-wrap: wrap; gap: 5px 10px; align-items: center; }
+    .hourly-temp { font-size: 15px; font-weight: 700; color: #0f172a; }
+    .hourly-feels { font-size: 11px; color: #64748b; font-style: italic; }
+    .hourly-precip { font-size: 11px; font-weight: 700; }
+    .hourly-badge { font-size: 8px; font-weight: 600; padding: 1px 6px; border-radius: 8px; display: inline-block; }
+    .hourly-stats { font-size: 9.5px; color: #94a3b8; font-family: 'Spline Sans Mono', monospace; display: flex; gap: 8px; flex-wrap: wrap; width: 100%; margin-top: 1px; }
   </style>
 </head>
 <body>
@@ -201,6 +219,15 @@
       <div class="loc-divider">or</div>
       <input class="loc-input" id="loc-input" type="text" placeholder="Search a city or zip…" autocomplete="off" oninput="searchCity(this.value)">
       <div class="loc-results" id="loc-results"></div>
+    </div>
+  </div>
+  <div class="hourly-overlay" id="hourly-overlay" onclick="closeHourlySheet(event)">
+    <div class="hourly-sheet">
+      <div class="hourly-sheet-head">
+        <div class="loc-handle"></div>
+        <div class="hourly-title" id="hourly-title"></div>
+      </div>
+      <div class="hourly-scroll" id="hourly-scroll"></div>
     </div>
   </div>
   <div id="main" style="display:none"></div>
@@ -462,13 +489,22 @@ async function loadData() {
   HOURLY_WIND_GUSTS   = json.hourly.wind_gusts_10m || [];
   lastUpdated         = new Date();
 
+  // Stash full arrays for hourly sheet
+  json_hourly_temp   = json.hourly.temperature_2m;
+  json_hourly_precip = json.hourly.precipitation;
+  json_hourly_prob   = json.hourly.precipitation_probability;
+  json_hourly_wind   = json.hourly.wind_speed_10m;
+  json_hourly_gust   = json.hourly.wind_gusts_10m;
+  json_hourly_hum    = json.hourly.relative_humidity_2m;
+  json_hourly_uv     = json.hourly.uv_index;
+
   FORECAST = json.daily.time.map((dateStr, i) => {
     const date     = new Date(dateStr + 'T00:00:00');
     const dayShort = DAYS_SHORT[date.getDay()];
     const dateLabel = `${dayShort} ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}`;
 
     const computeBlock = block => {
-      let totalPrecip = 0, maxWind = 0, maxGust = 0, winds = [], temps = [], hums = [], probs = [], uvs = [];
+      let totalPrecip = 0, maxWind = 0, maxGust = 0, maxWeatherCode = 0, winds = [], temps = [], hums = [], probs = [], uvs = [];
       for (let h = block.start; h < block.end; h++) {
         // overnight: hours 22-31 map to next day's 0-9 (h >= 24)
         const dayOffset = h >= 24 ? 1 : 0;
@@ -479,8 +515,9 @@ async function loadData() {
         probs.push(json.hourly.precipitation_probability[idx] || 0);
         const w = json.hourly.wind_speed_10m[idx] || 0;
         winds.push(w);
-        maxWind      = Math.max(maxWind, w);
-        maxGust      = Math.max(maxGust, json.hourly.wind_gusts_10m[idx] || 0);
+        maxWind         = Math.max(maxWind, w);
+        maxGust         = Math.max(maxGust, json.hourly.wind_gusts_10m[idx] || 0);
+        maxWeatherCode  = Math.max(maxWeatherCode, json.hourly.weather_code[idx] || 0);
         temps.push(json.hourly.temperature_2m[idx] || 0);
         hums.push(json.hourly.relative_humidity_2m[idx] || 60);
         uvs.push(json.hourly.uv_index[idx] || 0);
@@ -496,7 +533,7 @@ async function loadData() {
       const maxUV    = Math.round(Math.max(...uvs));
       const rf       = calcRealFeel(avgTemp, avgWind, avgHum, maxUV);
       const pollen   = pollenScoreFromUVAndRain(maxUV, totalPrecip);
-      return { ...block, precip: totalPrecip, prob: avgProb, wind: windRnd, gust: gustRnd, tempLo, tempHi, realFeel: rf, uv: maxUV, pollen, humidity: avgHum };
+      return { ...block, precip: totalPrecip, prob: avgProb, wind: windRnd, gust: gustRnd, tempLo, tempHi, realFeel: rf, uv: maxUV, pollen, humidity: avgHum, weatherCode: maxWeatherCode };
     };
 
     const blocks    = TIME_BLOCKS.map(computeBlock);
@@ -626,9 +663,12 @@ function render(skipRadarVisibility = false) {
     const avgT  = Math.round((block.tempLo + block.tempHi) / 2);
     const delta = rfDeltaStr(block.realFeel, avgT);
     return `
-      <div class="block" style="border-color:${block.precip > 0 ? c.bar : '#e2e8f0'}">
+      <div class="block" style="border-color:${block.precip > 0 ? c.bar : '#e2e8f0'};cursor:pointer;" onclick="openHourlySheet(${selectedDay}, ${block.start}, ${block.end}, '${block.range}')">
         ${block.precip > 0 ? `<div class="block-accent" style="background:${c.bar}"></div>` : ''}
-        <div class="block-time" style="font-weight:700">${block.range.toUpperCase()}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">
+          <div class="block-time" style="margin-bottom:0;">${block.range.toUpperCase()}</div>
+          <div style="width:22px;height:22px;flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center;transform:scale(0.78);transform-origin:right center;">${getDayIcon(block.weatherCode, block.precip, block.prob)}</div>
+        </div>
         <div class="block-precip" style="color:${block.precip > 0 ? c.text : '#cbd5e1'}">${block.precip > 0 ? block.precip.toFixed(2)+'"' : '—'}</div>
         <div class="block-badge" style="background:${c.badge};color:${c.badgeText}">${getRainLabelWeighted(block.precip, block.prob)}</div>
         <div class="temp-box">
@@ -662,7 +702,7 @@ function render(skipRadarVisibility = false) {
   const ovc    = getRainColor(ov.precip);
   const ovAvgT = Math.round((ov.tempLo + ov.tempHi) / 2);
   const overnightHTML = `
-    <div class="overnight" style="border-color:${ov.precip > 0 ? ovc.bar : '#c7d2fe'}">
+    <div class="overnight" style="border-color:${ov.precip > 0 ? ovc.bar : '#c7d2fe'};cursor:pointer;" onclick="openHourlySheet(${selectedDay}, ${OVERNIGHT_BLOCK.start}, ${OVERNIGHT_BLOCK.end}, '${OVERNIGHT_BLOCK.range}')">
       ${ov.precip > 0 ? `<div class="overnight-accent" style="background:${ovc.bar}"></div>` : ''}
       <div class="overnight-header">
         <div class="overnight-title">🌙 OVERNIGHT · 10PM–7AM</div>
@@ -1123,6 +1163,70 @@ function triggerRefresh() {
   if (btn) { btn.classList.remove('logo-spin'); void btn.offsetWidth; btn.classList.add('logo-spin'); }
   refresh();
 }
+
+/* ── Hourly sheet ── */
+function openHourlySheet(dayIndex, blockStart, blockEnd, blockLabel) {
+  const nowAbsHour = new Date().getHours(); // current hour of today
+  const rows = [];
+
+  for (let h = blockStart; h < blockEnd; h++) {
+    const dayOffset = h >= 24 ? 1 : 0;
+    const hour      = h >= 24 ? h - 24 : h;
+    const idx       = (dayIndex + dayOffset) * 24 + hour;
+    if (idx < 0 || idx >= HOURLY_PRECIP.length) continue;
+
+    const temp    = Math.round(json_hourly_temp[idx]     || 0);
+    const precip  = json_hourly_precip[idx]              || 0;
+    const prob    = Math.round(json_hourly_prob[idx]     || 0);
+    const wind    = Math.round(json_hourly_wind[idx]     || 0);
+    const gust    = Math.round(json_hourly_gust[idx]     || 0);
+    const hum     = Math.round(json_hourly_hum[idx]      || 0);
+    const uv      = Math.round(json_hourly_uv[idx]       || 0);
+    const feels   = calcRealFeel(temp, wind, hum, uv);
+    const c       = getRainColor(precip);
+    const wCode   = HOURLY_WEATHER_CODE[idx] || 0;
+    const icon    = getDayIcon(wCode, precip, prob);
+
+    const isNow   = dayIndex === 0 && hour === nowAbsHour && dayOffset === 0;
+    const ampm    = hour >= 12 ? 'pm' : 'am';
+    const label   = `${(hour % 12) || 12}${ampm}`;
+
+    const feelsDelta = feels !== temp ? ` · feels ${feels}°` : '';
+    const precipStr  = precip > 0 ? `<span class="hourly-precip" style="color:${c.text}">${precip.toFixed(2)}"</span><span class="hourly-badge" style="background:${c.badge};color:${c.badgeText}">${getRainLabel(precip)}</span>` : '';
+    const statsItems = [
+      `PROB ${prob}%`,
+      `WIND ${wind}${gust > wind ? ' / GUSTS ' + gust : ''} mph`,
+      `HUM ${hum}%`,
+      uv > 0 ? `UV ${uv}` : '',
+    ].filter(Boolean).join('  ·  ');
+
+    rows.push(`
+      <div class="hourly-row">
+        <div class="hourly-time${isNow ? ' now' : ''}">${isNow ? 'NOW' : label}</div>
+        <div class="hourly-data">
+          <span class="hourly-temp">${temp}°</span>
+          <span class="hourly-feels">${feels !== temp ? `feels ${feels}°` : 'on target'}</span>
+          ${precipStr}
+          <div class="hourly-stats">${statsItems}</div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;">${icon}</div>
+      </div>`);
+  }
+
+  document.getElementById('hourly-title').textContent = blockLabel;
+  document.getElementById('hourly-scroll').innerHTML  = rows.join('');
+  document.getElementById('hourly-overlay').classList.add('open');
+}
+
+function closeHourlySheet(e) {
+  if (e.target === document.getElementById('hourly-overlay'))
+    document.getElementById('hourly-overlay').classList.remove('open');
+}
+
+// Stash raw hourly arrays at load time so the sheet can access them
+let json_hourly_temp = [], json_hourly_precip = [], json_hourly_prob = [];
+let json_hourly_wind = [], json_hourly_gust   = [], json_hourly_hum  = [];
+let json_hourly_uv   = [];
 
 /* ── Boot ── */
 const REFRESH_MS = 30 * 60 * 1000; // 30 minutes
