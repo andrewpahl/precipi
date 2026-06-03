@@ -161,7 +161,8 @@
     /* Hourly modal */
     .hourly-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 100; }
     .hourly-overlay.open { display: block; }
-    .hourly-sheet { position: absolute; bottom: 0; left: 0; right: 0; background: #fff; border-radius: 18px 18px 0 0; padding: 12px 0 40px; max-width: 430px; margin: 0 auto; max-height: 82vh; display: flex; flex-direction: column; }
+    @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    .hourly-sheet { position: absolute; bottom: 0; left: 0; right: 0; background: #fff; border-radius: 18px 18px 0 0; padding: 12px 0 40px; max-width: 430px; margin: 0 auto; max-height: 82vh; display: flex; flex-direction: column; animation: sheetUp 0.28s cubic-bezier(0.32,0.72,0,1); transition: transform 0.2s ease; }
     .hourly-sheet-head { padding: 0 20px 12px; flex-shrink: 0; }
     .hourly-title { font-size: 13px; font-weight: 700; color: #0f172a; letter-spacing: 0.2px; }
     .hourly-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 16px; }
@@ -1222,6 +1223,40 @@ function closeHourlySheet(e) {
   if (e.target === document.getElementById('hourly-overlay'))
     document.getElementById('hourly-overlay').classList.remove('open');
 }
+
+// Swipe down to close hourly sheet
+(function() {
+  let startY = 0, dragging = false;
+  const getSheet = () => document.querySelector('.hourly-sheet');
+
+  document.addEventListener('touchstart', e => {
+    const sheet = getSheet();
+    if (!sheet || !document.getElementById('hourly-overlay').classList.contains('open')) return;
+    if (sheet.contains(e.target)) { startY = e.touches[0].clientY; dragging = true; }
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    if (!dragging) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy > 0) getSheet().style.transform = `translateY(${dy}px)`;
+  }, { passive: true });
+
+  document.addEventListener('touchend', e => {
+    if (!dragging) return;
+    dragging = false;
+    const dy = e.changedTouches[0].clientY - startY;
+    const sheet = getSheet();
+    if (dy > 80) {
+      sheet.style.transform = 'translateY(100%)';
+      setTimeout(() => {
+        document.getElementById('hourly-overlay').classList.remove('open');
+        sheet.style.transform = '';
+      }, 200);
+    } else {
+      sheet.style.transform = '';
+    }
+  }, { passive: true });
+})();
 
 // Stash raw hourly arrays at load time so the sheet can access them
 let json_hourly_temp = [], json_hourly_precip = [], json_hourly_prob = [];
