@@ -196,6 +196,7 @@
   </div>
   <div id="error">
     <p>⚠️ Could not load weather data.<br>Check your connection and try again.</p>
+    <div id="error-status" style="margin-top:14px;font-size:10px;font-family:'Spline Sans Mono',monospace;color:#94a3b8;line-height:2;text-align:left;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;"></div>
   </div>
   <div class="ptr-indicator" id="ptr-indicator">
     <div class="ptr-inner" id="ptr-inner">
@@ -490,20 +491,39 @@ const HOURLY_FIELDS = 'precipitation,precipitation_probability,wind_speed_10m,wi
 const DAILY_FIELDS  = 'temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,uv_index_max,sunrise,sunset,weather_code';
 const COMMON_PARAMS = `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FNew_York&forecast_days=7`;
 
+const FETCH_TIMEOUT_MS = 10000;
+const apiStatus = { gfs: null, ecmwf: null };
+
 async function fetchModel(model) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
     + `&hourly=${HOURLY_FIELDS}&daily=${DAILY_FIELDS}${COMMON_PARAMS}&models=${model}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`API error: ${model}`);
-  return res.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  } catch(e) {
+    clearTimeout(timer);
+    throw e.name === 'AbortError' ? new Error('Timeout') : e;
+  }
 }
 
 async function loadData() {
-  const [gfsResult, ecmwf] = await Promise.all([
-    fetchModel('gfs_seamless').catch(() => null),
+  const [gfsResult, ecmwfResult] = await Promise.allSettled([
+    fetchModel('gfs_seamless'),
     fetchModel('ecmwf_ifs025'),
   ]);
-  const gfs = gfsResult ?? ecmwf; // fall back to ECMWF if GFS is down
+
+  apiStatus.gfs   = gfsResult.status   === 'fulfilled' ? '✅ OK' : `❌ ${gfsResult.reason?.message   || 'Error'}`;
+  apiStatus.ecmwf = ecmwfResult.status === 'fulfilled' ? '✅ OK' : `❌ ${ecmwfResult.reason?.message || 'Error'}`;
+
+  if (ecmwfResult.status !== 'fulfilled') throw new Error('ECMWF unavailable');
+
+  const ecmwf = ecmwfResult.value;
+  const gfsResult2 = gfsResult.status === 'fulfilled' ? gfsResult.value : ecmwf;
+  const gfs = gfsResult2; // fall back to ECMWF if GFS is down
 
   // Splice: GFS for days 0-(GFS_DAYS-1), ECMWF for the rest
   // Fall back to GFS for any field ECMWF doesn't provide (e.g. uv_index)
@@ -1331,6 +1351,15 @@ async function refresh() {
   } catch(e) {
     document.getElementById('loading').style.display = 'none';
     document.getElementById('error').style.display   = 'flex';
+    const statusEl = document.getElementById('error-status');
+    if (statusEl) {
+      const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
+      statusEl.innerHTML = [
+        `<div style="color:#64748b;font-weight:600;margin-bottom:4px;">API STATUS · ${time}</div>`,
+        `<div>GFS (short-range)&nbsp;&nbsp; ${apiStatus.gfs   ?? '❓ Not reached'}</div>`,
+        `<div>ECMWF (forecast)&nbsp;&nbsp;&nbsp; ${apiStatus.ecmwf ?? '❓ Not reached'}</div>`,
+      ].join('');
+    }
   }
 }
 
