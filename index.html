@@ -499,10 +499,11 @@ async function fetchModel(model) {
 }
 
 async function loadData() {
-  const [gfs, ecmwf] = await Promise.all([
-    fetchModel('gfs_seamless'),
+  const [gfsResult, ecmwf] = await Promise.all([
+    fetchModel('gfs_seamless').catch(() => null),
     fetchModel('ecmwf_ifs025'),
   ]);
+  const gfs = gfsResult ?? ecmwf; // fall back to ECMWF if GFS is down
 
   // Splice: GFS for days 0-(GFS_DAYS-1), ECMWF for the rest
   // Fall back to GFS for any field ECMWF doesn't provide (e.g. uv_index)
