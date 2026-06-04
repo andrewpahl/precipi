@@ -1351,6 +1351,15 @@ async function refresh() {
   } catch(e) {
     document.getElementById('loading').style.display = 'none';
     document.getElementById('error').style.display   = 'flex';
+
+    const apiDown = apiStatus.gfs?.startsWith('❌') || apiStatus.ecmwf?.startsWith('❌');
+    const msgEl   = document.querySelector('#error p');
+    if (msgEl) {
+      msgEl.innerHTML = apiDown
+        ? `Sorry — our weather data provider is having an outage right now.<br>We'll be back as soon as they recover.`
+        : `⚠️ Could not load weather data.<br>Check your connection and try again.`;
+    }
+
     const statusEl = document.getElementById('error-status');
     if (statusEl) {
       const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
